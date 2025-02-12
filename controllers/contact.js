@@ -5,23 +5,31 @@ const contactController = async (req, res) => {
         const { email, phoneNumber } = req.body;
 
         //validating email
-        if (!email || typeof email !== "string") {
+        if (!email && !phoneNumber) {
             return res.status(400).json({
-                message: "invalid email!"
-            });
-        }
-
-        //validating phone number
-        if (!phoneNumber || typeof phoneNumber !== "string") {
-            return res.status(400).json({
-                message: "invalid phone number!"
+                message: "any one of the field should contain value!"
             });
         }
 
         const queryTextForEmailAndPhn = `SELECT * FROM contact WHERE email LIKE $1 OR phonenumber LIKE $2`;
+        const queryTextForEmail = `SELECT * FROM contact WHERE email LIKE $1`
+        const queryTextForPhn = `SELECT * FROM contact WHERE phonenumber LIKE $1`
 
-        const response = await db.query(queryTextForEmailAndPhn, [email, phoneNumber])
+        let response;
+
+        if (phoneNumber !== null && email !== null) {
+            response = await db.query(queryTextForEmailAndPhn, [email, phoneNumber])
+        }
+        else if (phoneNumber !== null && email === null) {
+            response = await db.query(queryTextForPhn, [phoneNumber])
+        }
+        else {
+            response = await db.query(queryTextForEmail, [email])
+        }
+
         const totalUsers = response.rows;
+
+        // console.log(totalUsers)
 
         if (totalUsers.length === 0) {
 
@@ -31,70 +39,77 @@ const contactController = async (req, res) => {
                 `
             await db.query(createNewItemQuery, [phoneNumber, email, null, "primary", new Date(), new Date(), null])
 
+            const response = await db.query(queryTextForEmailAndPhn, [email, phoneNumber])
+
+            const totalUsers = response.rows;
+
+            const primaryContactId = totalUsers[0].id
+            const emails = [totalUsers[0].email];
+            const phoneNumbers = [totalUsers[0].phonenumber];
+            const secondaryContactIds = []
+
             return res.status(200).json({
-                message: "primary contact successfully created"
-            });
+                message: "Primary contact created!",
+                contact: {
+                    primaryContactId,
+                    emails,
+                    phoneNumbers,
+                    secondaryContactIds
+                }
+            })
+
         }
         else if (totalUsers.length === 1) {
 
-            const createNewItemQuery = `
-            insert into contact(phonenumber,email,linkedId,linkprecedence,createdat,updatedat,deletedat)
-            values ($1,$2,$3,$4,$5,$6,$7)
-            `
-            await db.query(createNewItemQuery, [phoneNumber, email, totalUsers[0].id, "secondary", new Date(), new Date(), null])
+            const primaryContact = totalUsers[0];
 
-            return res.status(200).json({
-                message: "secondary contact successfully created"
-            })
-        }
-        else {
+            const isNewInfo = (phoneNumber && phoneNumber !== primaryContact.phonenumber) || (email && email !== primaryContact.email);
 
-            const primaryItems = totalUsers.filter(eachItem => eachItem.linkprecedence === "primary")
+            if (isNewInfo) {
 
-            if (primaryItems.length === 1) {
+                const createNewItemQuery = `
+                insert into contact(phonenumber,email,linkedId,linkprecedence,createdat,updatedat,deletedat)
+                values ($1,$2,$3,$4,$5,$6,$7)
+                `
+                await db.query(createNewItemQuery, [phoneNumber, email, totalUsers[0].id, "secondary", new Date(), new Date(), null])
 
-                const primaryContatctId = primaryItems.id;
-                let emails = [];
-                let phoneNumbers = [];
+                const response = await db.query(queryTextForEmailAndPhn, [email, phoneNumber]);
+                const updatedUsers = response.rows;
+
+                const mainPrimary = updatedUsers[0];
+
+                const primaryContactId = mainPrimary.id;
+                let emails = new Set();
+                let phoneNumbers = new Set();
                 let secondaryContactIds = [];
 
-                totalUsers.forEach(eachItem => {
-                    if (emails.length === 0 || emails[emails.length - 1] !== eachItem.email) emails.push(eachItem.email);
-                    if (phoneNumbers.length === 0 || phoneNumbers[phoneNumbers.length - 1] !== eachItem.phonenumber) phoneNumbers.push(eachItem.phonenumber)
+                updatedUsers.forEach(eachItem => {
+                    if (eachItem.email) emails.add(eachItem.email);
+                    if (eachItem.phonenumber) phoneNumbers.add(eachItem.phonenumber);
                     if (eachItem.linkprecedence === "secondary") secondaryContactIds.push(eachItem.id);
-                })
+                });
 
                 return res.status(200).json({
+                    message: "Secondary contact created!",
                     contact: {
-                        primaryContatctId,
-                        emails,
-                        phoneNumbers,
+                        primaryContactId,
+                        emails: [...emails],
+                        phoneNumbers: [...phoneNumbers],
                         secondaryContactIds
                     }
-                })
+                });
+
             }
             else {
 
-                const query = `update contact set linkprecedence = 'secondary',linkedid = $1 where id = $2`;
-                await db.query(query, [primaryItems[0].id, primaryItems[1].id]);
-
-                const response = await db.query(queryTextForEmailAndPhn, [email, phoneNumber])
-                const totalUsers = response.rows;
-
-                const primaryContatctId = primaryItems[0].id;
-                let emails = [];
-                let phoneNumbers = [];
-                let secondaryContactIds = [];
-
-                totalUsers.forEach(eachItem => {
-                    if (emails.length === 0 || emails[emails.length - 1] !== eachItem.email) emails.push(eachItem.email);
-                    if (phoneNumbers.length === 0 || phoneNumbers[phoneNumbers.length - 1] !== eachItem.phonenumber) phoneNumbers.push(eachItem.phonenumber)
-                    if (eachItem.linkprecedence === "secondary") secondaryContactIds.push(eachItem.id);
-                })
+                const primaryContactId = totalUsers[0].id
+                const emails = [totalUsers[0].email];
+                const phoneNumbers = [totalUsers[0].phonenumber];
+                const secondaryContactIds = []
 
                 return res.status(200).json({
                     contact: {
-                        primaryContatctId,
+                        primaryContactId,
                         emails,
                         phoneNumbers,
                         secondaryContactIds
@@ -102,11 +117,68 @@ const contactController = async (req, res) => {
                 })
 
             }
+
+        }
+        else {
+            const primaryItems = totalUsers.filter(eachItem => eachItem.linkprecedence === "primary");
+
+            if (primaryItems.length === 1) {
+                const primaryContactId = primaryItems[0].id;
+
+                let emails = new Set();
+                let phoneNumbers = new Set();
+                let secondaryContactIds = [];
+
+                totalUsers.forEach(eachItem => {
+                    if (eachItem.email) emails.add(eachItem.email);
+                    if (eachItem.phonenumber) phoneNumbers.add(eachItem.phonenumber);
+                    if (eachItem.linkprecedence === "secondary") secondaryContactIds.push(eachItem.id);
+                });
+
+                return res.status(200).json({
+                    contact: {
+                        primaryContactId,
+                        emails: [...emails],
+                        phoneNumbers: [...phoneNumbers],
+                        secondaryContactIds
+                    }
+                });
+            }
+            else {
+
+                const mainPrimary = primaryItems[0];
+                const secondaryToUpdate = primaryItems.slice(1);
+
+                for (let sec of secondaryToUpdate) {
+                    const query = `UPDATE contact SET linkprecedence = 'secondary', linkedid = $1 WHERE id = $2`;
+                    await db.query(query, [mainPrimary.id, sec.id]);
+                }
+
+                const response = await db.query(queryTextForEmailAndPhn, [email, phoneNumber]);
+                const updatedUsers = response.rows;
+
+                const primaryContactId = mainPrimary.id;
+                let emails = new Set();
+                let phoneNumbers = new Set();
+                let secondaryContactIds = [];
+
+                updatedUsers.forEach(eachItem => {
+                    if (eachItem.email) emails.add(eachItem.email);
+                    if (eachItem.phonenumber) phoneNumbers.add(eachItem.phonenumber);
+                    if (eachItem.linkprecedence === "secondary") secondaryContactIds.push(eachItem.id);
+                });
+
+                return res.status(200).json({
+                    contact: {
+                        primaryContactId,
+                        emails: [...emails],
+                        phoneNumbers: [...phoneNumbers],
+                        secondaryContactIds
+                    }
+                });
+            }
         }
 
-        return res.status(200).json({
-            totalUsers
-        })
 
     } catch (error) {
         console.error("Error in contact:", error.message);
